@@ -27,13 +27,8 @@ x-restic-base: &restic-base
   hostname: openarchiver                 # stable snapshot host name
   env_file: [.env]
   environment:
-    # Repo password — REQUIRED, no default. This guard fails every compose command
-    # fast (before touching the stack) if it is unset or empty in .env.
     RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env (openssl rand -base64 32)}
     RESTIC_BACKUP_SOURCES: /volumes/pgdata /volumes/meilidata /data /staging
-    # Retention for `restic forget`. Single source of truth: .env. Set here too so
-    # it beats any default baked into the image. Empty in .env => forget is skipped
-    # (everything is kept, nothing is pruned).
     RESTIC_FORGET_ARGS: ${RESTIC_FORGET_ARGS}
     PRE_COMMANDS: |
       docker stop open-archiver postgres meilisearch valkey tika
