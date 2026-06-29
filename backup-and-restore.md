@@ -185,13 +185,93 @@ restic is backend-agnostic — change only `RESTIC_REPOSITORY` (and credentials)
 
 | Target | `RESTIC_REPOSITORY` | Extra |
 |---|---|---|
-| S3 / B2 / MinIO | `s3:https://<endpoint>/<bucket>/openarchiver` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| S3 / B2 / MinIO / Hetzner **Object Storage** | `s3:https://<endpoint>/<bucket>/openarchiver` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
 | Local / external disk | `/srv/restic` (mount it into the container) | — |
 | SFTP / another server | `sftp:user@host:/srv/restic` | SSH key reachable by the container |
+| Hetzner **Storage Box** | `sftp:hetzner-sb:restic/openarchiver-prod` | SSH key + `ssh/config` — see §9 |
+
+> ⚠️ A Hetzner **Storage Box** is **not** S3 — it speaks SFTP on port 23. (Hetzner
+> **Object Storage** is the S3-compatible product; use the `s3:` row for that.)
 
 ---
 
-## 9. Troubleshooting
+## 9. Hetzner Storage Box (SFTP)
+
+A Storage Box is an SFTP target on **port 23**. restic's sftp backend can't put a
+port in the repository URL, so the port + key are configured in a small `ssh/config`
+that gets mounted into the container. **Your private key stays owned by your user** —
+only the throwaway `ssh/config` needs to be root-owned (ssh runs as root in the
+container and rejects a non-root-owned config; for the private key that ownership
+check is skipped, so it loads fine read-only).
+
+### 9.1 Put your public key on the box (once)
+
+Supply your SSH key when creating the Storage Box.
+
+### 9.2 Create SSH config
+
+Create `ssh/config` with the following template. Replace
+`u123456` with your Storage Box ID and make it root-owned:
+
+```
+Host hetzner-sb
+    HostName u123456.your-storagebox.de
+    User u123456
+    Port 23
+    IdentityFile /keys/sb_key          # in-container path of your key (see 9.4)
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new   # trusts the host key on first connect
+```
+
+```bash
+sudo chown root:root ssh/config && sudo chmod 600 ssh/config
+```
+
+### 9.3 Point `.env` at the box
+
+```ini
+RESTIC_REPOSITORY=sftp:hetzner-sb:restic/openarchiver-prod
+SSH_KEY_PATH=/home/<you>/.ssh/id_ed25519     # your PRIVATE key; stays yours
+# AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY stay empty
+```
+
+The path after the host alias (`restic/openarchiver-prod`) is **where the repo
+lives**. SFTP on a Storage Box is chrooted, so it lands as a top-level folder
+`restic/openarchiver-prod` in your box. Different paths = independent repos, so
+**several repos can share one Storage Box** (e.g. `restic/host-a`, `restic/host-b`).
+
+### 9.4 Enable the two SFTP mounts in `docker-compose.yml`
+
+The mounts ship **commented out** so the default S3/local setup keeps working. For
+SFTP, uncomment both lines in **two** places — the shared `x-restic-base` block
+(covers `backup` + `restic`) **and** the `restore` service's `volumes:`:
+
+```yaml
+    - ./ssh:/root/.ssh:ro                                          # config (root-owned)
+    - ${SSH_KEY_PATH:?set SSH_KEY_PATH in .env}:/keys/sb_key:ro    # your key, read-only
+```
+
+The key is mounted to a separate path (`/keys/sb_key`), not inside `/root/.ssh` —
+mounting a file into the read-only `./ssh` mount would fail.
+
+### 9.5 Initialize and back up
+
+```bash
+docker compose run --rm restic snapshots   # auto-creates the repo, then empty list
+docker compose run --rm backup
+```
+
+Verify the repo exists on the box:
+
+```bash
+sftp -P 23 u123456@u123456.your-storagebox.de
+sftp> ls restic/openarchiver-prod
+config   data   index   keys   locks   snapshots
+```
+
+---
+
+## 10. Troubleshooting
 
 - **Stack didn't restart after a failed backup** — `POST_COMMANDS_EXIT` should
   always restart it; if not, run `docker start postgres meilisearch valkey tika open-archiver`.
