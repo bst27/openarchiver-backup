@@ -81,6 +81,10 @@ Edit `.env`:
 - `OA_PROJECT_DIR` — path of your OpenArchiver checkout (its `.env` lives there).
 - `STORAGE_LOCAL_ROOT_PATH` — same value as in OpenArchiver's `.env`.
 - `PG_VOLUME` / `MEILI_VOLUME` — the volume names from §3.
+- `RESTIC_FORGET_ARGS` — retention policy (ships with a sane default).
+
+> Using a non-S3 backend (local disk, SFTP/Storage Box)? See §8 — you set a
+> different `RESTIC_REPOSITORY` and enable the matching compose overlay.
 
 ---
 
@@ -121,16 +125,15 @@ docker ps   # open-archiver, postgres, meilisearch, valkey, tika should be "Up"
 
 ### Retention
 
-After each backup, restic runs `forget` with `RESTIC_FORGET_ARGS`, then prunes.
-Override it in `.env` (default: keep 7 daily, 4 weekly, 6 monthly, then `--prune`):
+After each backup, restic runs `forget` with `RESTIC_FORGET_ARGS` (from `.env`),
+then prunes. Tune it in `.env` (shipped default: keep 7 daily, 4 weekly, 6 monthly,
+then `--prune`):
 
 ```ini
 RESTIC_FORGET_ARGS=--keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
 ```
 
-`docker-compose.yml` interpolates this with the default as a fallback, so an unset
-`.env` keeps the old behaviour. (It must stay in the compose `environment:` block —
-a value there beats `env_file`, so the interpolation is what lets `.env` win.)
+Leave it empty to skip `forget` entirely (keeps every snapshot, prunes nothing).
 
 ### Scheduling
 
@@ -189,17 +192,30 @@ ingestion sources look right.
 
 ## 8. Other backup targets (flexible)
 
-restic is backend-agnostic — change only `RESTIC_REPOSITORY` (and credentials):
+restic is backend-agnostic. The **base** `docker-compose.yml` defines the backup
+*sources* (always the same); a backend only changes the *destination*. S3 needs
+nothing but env vars; backends that need host access (a local repo dir, an SSH key)
+add it via an overlay you copy to `docker-compose.override.yml`:
 
-| Target | `RESTIC_REPOSITORY` | Extra |
-|---|---|---|
-| S3 / B2 / MinIO / Hetzner **Object Storage** | `s3:https://<endpoint>/<bucket>/openarchiver` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| Local / external disk | `/srv/restic` (mount it into the container) | — |
-| SFTP / another server | `sftp:user@host:/srv/restic` | SSH key reachable by the container |
-| Hetzner **Storage Box** | `sftp:hetzner-sb:restic/openarchiver-prod` | SSH key + `ssh/config` — see §9 |
+| Target | `RESTIC_REPOSITORY` | Env | Overlay |
+|---|---|---|---|
+| S3 / B2 / MinIO / Hetzner **Object Storage** | `s3:https://<endpoint>/<bucket>/openarchiver` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — |
+| Local / external disk | `/srv/restic` | `RESTIC_LOCAL_REPO_PATH` (host dir) | `docker-compose.local.yml.example` |
+| SFTP / another server | `sftp:user@host:/srv/restic` | `SSH_KEY_PATH` | `docker-compose.sftp.yml.example` |
+| Hetzner **Storage Box** | `sftp:hetzner-sb:restic/openarchiver-prod` | `SSH_KEY_PATH` + `ssh/config` — see §9 | `docker-compose.sftp.yml.example` |
+
+Enable an overlay by copying it to the auto-merged name, e.g. for a local disk:
+
+```bash
+cp docker-compose.local.yml.example docker-compose.override.yml
+```
 
 > ⚠️ A Hetzner **Storage Box** is **not** S3 — it speaks SFTP on port 23. (Hetzner
 > **Object Storage** is the S3-compatible product; use the `s3:` row for that.)
+>
+> 💡 Without the local overlay a path repo like `/srv/restic` would be written
+> *inside* the throwaway `--rm` container and lost — the overlay mounts the host
+> dir in at `/srv/restic`.
 
 ---
 
@@ -252,10 +268,10 @@ lives**. SFTP on a Storage Box is chrooted, so it lands as a top-level folder
 
 The ssh config + key mounts live in a per-deployment overlay that `docker compose`
 auto-merges on top of `docker-compose.yml` (so the tracked compose stays clean and
-S3/local stays the default). Enable it by copying the example:
+S3 stays the no-overlay default). Enable it by copying the example:
 
 ```bash
-cp docker-compose.override.yml.example docker-compose.override.yml
+cp docker-compose.sftp.yml.example docker-compose.override.yml
 ```
 
 This **appends** two mounts to `backup`, `restic` and `restore`: `./ssh` →

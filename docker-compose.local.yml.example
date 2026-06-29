@@ -1,0 +1,32 @@
+# =============================================================================
+# Local / external-disk backend overlay.
+#
+# Use this when RESTIC_REPOSITORY is a path (e.g. /srv/restic) instead of an
+# s3:/sftp: URL. The restic repo lives on the HOST and must be mounted into the
+# container — otherwise restic writes into the throwaway --rm container and the
+# backup is lost when the container is removed.
+#
+# `docker compose` auto-merges a docker-compose.override.yml on top of
+# docker-compose.yml. Enable this overlay by copying it to that name:
+#
+#     cp docker-compose.local.yml.example docker-compose.override.yml
+#
+# Then in .env set:
+#     RESTIC_REPOSITORY=/srv/restic          # the IN-CONTAINER repo path (fixed)
+#     RESTIC_LOCAL_REPO_PATH=/mnt/disk/restic # the HOST dir, mounted to /srv/restic
+#
+# Not needed for S3/Object Storage (env-only); SFTP uses
+# docker-compose.sftp.yml.example. The mount is APPENDED to each service's
+# existing volumes (it doesn't replace them).
+# =============================================================================
+
+x-local-repo: &local-repo
+  - ${RESTIC_LOCAL_REPO_PATH:?set RESTIC_LOCAL_REPO_PATH in .env}:/srv/restic   # restic repo on the host
+
+services:
+  backup:
+    volumes: *local-repo
+  restic:
+    volumes: *local-repo
+  restore:
+    volumes: *local-repo

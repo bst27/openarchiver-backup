@@ -28,10 +28,10 @@ x-restic-base: &restic-base
   env_file: [.env]
   environment:
     RESTIC_BACKUP_SOURCES: /volumes/pgdata /volumes/meilidata /data /staging
-    # Override via RESTIC_FORGET_ARGS in .env; falls back to this default if unset.
-    # (Must be set here, not just in .env: an `environment:` value beats env_file,
-    #  so interpolation with a default is what makes the .env override actually win.)
-    RESTIC_FORGET_ARGS: ${RESTIC_FORGET_ARGS:---keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune}
+    # Retention for `restic forget`. Single source of truth: .env. Set here too so
+    # it beats any default baked into the image. Empty in .env => forget is skipped
+    # (everything is kept, nothing is pruned).
+    RESTIC_FORGET_ARGS: ${RESTIC_FORGET_ARGS}
     PRE_COMMANDS: |
       docker stop open-archiver postgres meilisearch valkey tika
     POST_COMMANDS_EXIT: |
@@ -43,8 +43,10 @@ x-restic-base: &restic-base
     - ${STORAGE_LOCAL_ROOT_PATH:?set STORAGE_LOCAL_ROOT_PATH in .env}:/data:ro   # emails + attachments
     - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/.env:/staging/.env:ro
     - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/docker-compose.yml:/staging/docker-compose.yml:ro
-    # SFTP backend (e.g. Hetzner Storage Box) adds ssh/key mounts here via
-    # docker-compose.override.yml — see docker-compose.override.yml.example.
+    # Backends needing extra host mounts add them via docker-compose.override.yml —
+    # copy the matching overlay (S3/Object Storage needs none, it is env-only):
+    #   SFTP / Hetzner Storage Box -> docker-compose.sftp.yml.example
+    #   local / external disk      -> docker-compose.local.yml.example
 
 services:
   # The actual backup routine (stop stack -> snapshot -> forget -> start stack).
@@ -77,7 +79,7 @@ services:
 volumes:
   pgdata:
     external: true
-    name: ${PG_VOLUME:-openarchiver_pgdata}
+    name: ${PG_VOLUME:?set PG_VOLUME in .env}
   meilidata:
     external: true
-    name: ${MEILI_VOLUME:-openarchiver_meilidata}
+    name: ${MEILI_VOLUME:?set MEILI_VOLUME in .env}
