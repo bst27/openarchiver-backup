@@ -28,7 +28,10 @@ x-restic-base: &restic-base
   env_file: [.env]
   environment:
     RESTIC_BACKUP_SOURCES: /volumes/pgdata /volumes/meilidata /data /staging
-    RESTIC_FORGET_ARGS: --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune
+    # Override via RESTIC_FORGET_ARGS in .env; falls back to this default if unset.
+    # (Must be set here, not just in .env: an `environment:` value beats env_file,
+    #  so interpolation with a default is what makes the .env override actually win.)
+    RESTIC_FORGET_ARGS: ${RESTIC_FORGET_ARGS:---keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune}
     PRE_COMMANDS: |
       docker stop open-archiver postgres meilisearch valkey tika
     POST_COMMANDS_EXIT: |
@@ -40,10 +43,8 @@ x-restic-base: &restic-base
     - ${STORAGE_LOCAL_ROOT_PATH:?set STORAGE_LOCAL_ROOT_PATH in .env}:/data:ro   # emails + attachments
     - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/.env:/staging/.env:ro
     - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/docker-compose.yml:/staging/docker-compose.yml:ro
-    # --- SFTP backend only (e.g. Hetzner Storage Box): uncomment BOTH lines.
-    #     Not needed for S3 / local repos. See "Hetzner Storage Box" in backup-and-restore.md.
-    #- ./ssh:/root/.ssh:ro                                        # ssh config (root-owned)
-    #- ${SSH_KEY_PATH:?set SSH_KEY_PATH in .env}:/keys/sb_key:ro  # your private key, read-only
+    # SFTP backend (e.g. Hetzner Storage Box) adds ssh/key mounts here via
+    # docker-compose.override.yml — see docker-compose.override.yml.example.
 
 services:
   # The actual backup routine (stop stack -> snapshot -> forget -> start stack).
@@ -69,10 +70,8 @@ services:
       - ${STORAGE_LOCAL_ROOT_PATH:?set STORAGE_LOCAL_ROOT_PATH in .env}:/data
       - ./restore.sh:/restore.sh:ro
       - ./restore-out:/restore-out                          # restored upstream .env lands here
-      # --- SFTP backend only (e.g. Hetzner Storage Box): uncomment BOTH lines.
-      #     Not needed for S3 / local repos. See "Hetzner Storage Box" in backup-and-restore.md.
-      #- ./ssh:/root/.ssh:ro                                        # ssh config (root-owned)
-      #- ${SSH_KEY_PATH:?set SSH_KEY_PATH in .env}:/keys/sb_key:ro  # your private key, read-only
+      # SFTP backend adds ssh/key mounts here via docker-compose.override.yml
+      # (see docker-compose.override.yml.example).
 
 # Reference the running stack's volumes by their real (external) names.
 volumes:

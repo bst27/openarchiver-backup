@@ -121,8 +121,16 @@ docker ps   # open-archiver, postgres, meilisearch, valkey, tika should be "Up"
 
 ### Retention
 
-Configured via `RESTIC_FORGET_ARGS` in `docker-compose.yml`
-(default: keep 7 daily, 4 weekly, 6 monthly, then `--prune`). Adjust to taste.
+After each backup, restic runs `forget` with `RESTIC_FORGET_ARGS`, then prunes.
+Override it in `.env` (default: keep 7 daily, 4 weekly, 6 monthly, then `--prune`):
+
+```ini
+RESTIC_FORGET_ARGS=--keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune
+```
+
+`docker-compose.yml` interpolates this with the default as a fallback, so an unset
+`.env` keeps the old behaviour. (It must stay in the compose `environment:` block —
+a value there beats `env_file`, so the interpolation is what lets `.env` win.)
 
 ### Scheduling
 
@@ -240,19 +248,20 @@ lives**. SFTP on a Storage Box is chrooted, so it lands as a top-level folder
 `restic/openarchiver-prod` in your box. Different paths = independent repos, so
 **several repos can share one Storage Box** (e.g. `restic/host-a`, `restic/host-b`).
 
-### 9.4 Enable the two SFTP mounts in `docker-compose.yml`
+### 9.4 Enable the SFTP mounts via `docker-compose.override.yml`
 
-The mounts ship **commented out** so the default S3/local setup keeps working. For
-SFTP, uncomment both lines in **two** places — the shared `x-restic-base` block
-(covers `backup` + `restic`) **and** the `restore` service's `volumes:`:
+The ssh config + key mounts live in a per-deployment overlay that `docker compose`
+auto-merges on top of `docker-compose.yml` (so the tracked compose stays clean and
+S3/local stays the default). Enable it by copying the example:
 
-```yaml
-    - ./ssh:/root/.ssh:ro                                          # config (root-owned)
-    - ${SSH_KEY_PATH:?set SSH_KEY_PATH in .env}:/keys/sb_key:ro    # your key, read-only
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
 ```
 
-The key is mounted to a separate path (`/keys/sb_key`), not inside `/root/.ssh` —
-mounting a file into the read-only `./ssh` mount would fail.
+This **appends** two mounts to `backup`, `restic` and `restore`: `./ssh` →
+`/root/.ssh` (the root-owned config) and your key (`SSH_KEY_PATH`) → `/keys/sb_key`.
+The key goes to a separate path, not inside `/root/.ssh` — mounting a file into the
+read-only `./ssh` mount would fail. The real override file is gitignored.
 
 ### 9.5 Initialize and back up
 
