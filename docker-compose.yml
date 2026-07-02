@@ -1,0 +1,83 @@
+# =============================================================================
+# Backup / Restore tooling for a self-hosted OpenArchiver stack.
+#
+# This is a STANDALONE project — the official OpenArchiver repo is never touched.
+# It reaches the running stack via the stack's external Docker volumes and the
+# host bind-mount of the email storage. The stack is briefly stopped during a
+# backup so PostgreSQL/Meilisearch are copied cold (consistent).
+#
+# Usage (run from this directory, with a populated .env):
+#   Backup:      docker compose run --rm backup
+#   List:        docker compose run --rm restic snapshots
+#   Verify:      docker compose run --rm restic check
+#   Restore:     docker compose run --rm restore latest --force
+# The repository auto-initializes on first use: the resticker entrypoint runs
+# `restic cat config` and, if that fails, `restic init` itself (unless SKIP_INIT
+# is set) — so there is no separate init step.
+#
+# Based on resticker (https://github.com/djmaze/resticker) — ships real restic.
+# The `backup` service runs resticker's /usr/local/bin/backup routine, which
+# executes PRE_COMMANDS, backs up RESTIC_BACKUP_SOURCES, runs forget/prune, then
+# POST_COMMANDS_EXIT (so the stack is always restarted, even on failure).
+# =============================================================================
+
+# Shared config for the read-only services (backup + ad-hoc restic commands).
+x-restic-base: &restic-base
+  image: mazzolino/restic
+  hostname: openarchiver                 # stable snapshot host name
+  env_file: [.env]
+  environment:
+    RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env (openssl rand -base64 32)}
+    RESTIC_BACKUP_SOURCES: /volumes/pgdata /volumes/meilidata /data /staging
+    RESTIC_FORGET_ARGS: ${RESTIC_FORGET_ARGS}
+    PRE_COMMANDS: |
+      docker stop open-archiver postgres meilisearch valkey tika
+    POST_COMMANDS_EXIT: |
+      docker start postgres meilisearch valkey tika open-archiver
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock          # to stop/start the stack
+    - pgdata:/volumes/pgdata:ro                           # PostgreSQL data
+    - meilidata:/volumes/meilidata:ro                     # Meilisearch index
+    - ${STORAGE_LOCAL_ROOT_PATH:?set STORAGE_LOCAL_ROOT_PATH in .env}:/data:ro   # emails + attachments
+    - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/.env:/staging/.env:ro
+    - ${OA_PROJECT_DIR:?set OA_PROJECT_DIR in .env}/docker-compose.yml:/staging/docker-compose.yml:ro
+    # Backends needing extra host mounts add them via docker-compose.override.yml —
+    # copy the matching overlay (S3/Object Storage needs none, it is env-only):
+    #   SFTP / Hetzner Storage Box -> docker-compose.sftp.yml.example
+    #   local / external disk      -> docker-compose.local.yml.example
+
+services:
+  # The actual backup routine (stop stack -> snapshot -> forget -> start stack).
+  backup:
+    <<: *restic-base
+    entrypoint: ["/usr/local/bin/backup"]
+
+  # Ad-hoc restic commands: snapshots, check, unlock, ...
+  # (default entrypoint passes its args straight to `restic`.)
+  restic:
+    <<: *restic-base
+
+  # Restore (volumes mounted READ-WRITE; only run deliberately).
+  restore:
+    image: mazzolino/restic
+    hostname: openarchiver
+    env_file: [.env]
+    entrypoint: ["/restore.sh"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - pgdata:/volumes/pgdata
+      - meilidata:/volumes/meilidata
+      - ${STORAGE_LOCAL_ROOT_PATH:?set STORAGE_LOCAL_ROOT_PATH in .env}:/data
+      - ./restore.sh:/restore.sh:ro
+      - ./restore-out:/restore-out                          # restored upstream .env lands here
+      # SFTP backend adds ssh/key mounts here via docker-compose.override.yml
+      # (see docker-compose.sftp.yml.example).
+
+# Reference the running stack's volumes by their real (external) names.
+volumes:
+  pgdata:
+    external: true
+    name: ${PG_VOLUME:?set PG_VOLUME in .env}
+  meilidata:
+    external: true
+    name: ${MEILI_VOLUME:?set MEILI_VOLUME in .env}

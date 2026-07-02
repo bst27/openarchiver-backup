@@ -1,0 +1,26 @@
+# =============================================================================
+# SFTP backend overlay (e.g. a Hetzner Storage Box).
+#
+# `docker compose` auto-merges a docker-compose.override.yml on top of
+# docker-compose.yml. Enable the SFTP mounts by copying this file to that name —
+# it is per-deployment and gitignored, so the tracked compose stays clean:
+#
+#     cp docker-compose.sftp.yml.example docker-compose.override.yml
+#
+# Not needed for S3/Object Storage (env-only); local disk uses
+# docker-compose.local.yml.example instead. The mounts are APPENDED to each
+# service's existing volumes (they don't replace them). See "Hetzner Storage Box
+# (SFTP)" in README.md for the full setup (ssh/config, key, known_hosts).
+# =============================================================================
+
+x-sftp-volumes: &sftp-volumes
+  - ./ssh:/root/.ssh:ro                                        # ssh config (root-owned)
+  - ${SSH_KEY_PATH:?set SSH_KEY_PATH in .env}:/keys/sb_key:ro  # your private key, read-only
+
+services:
+  backup:
+    volumes: *sftp-volumes
+  restic:
+    volumes: *sftp-volumes
+  restore:
+    volumes: *sftp-volumes

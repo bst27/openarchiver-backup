@@ -1,0 +1,14 @@
+# real secrets / config — never commit
+.env
+
+# SSH material for the SFTP backend (config, keys, known_hosts) — never commit
+ssh/
+
+# per-deployment compose overlay (e.g. SFTP mounts); keep the .example tracked
+docker-compose.override.yml
+
+# transient restore output (restored upstream .env etc.)
+restore-out/
+
+# IDE
+.idea/
