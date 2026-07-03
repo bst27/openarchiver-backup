@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint the POSIX-sh restore helper (shellcheck ships on ubuntu-latest).
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck restore.sh
+
+  # YAML lint + render smoke-test of the base compose and each backend overlay.
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install yamllint
+      - run: yamllint -d relaxed docker-compose.yml docker-compose.*.example
+      # The services declare `env_file: [.env]` and use ${VAR:?...} required vars,
+      # so `docker compose config` needs a populated .env. `.env.example` is not
+      # enough (`:?` fails on empty values). Generate a dummy .env inline (no
+      # committed secret-shaped fixture -> no gitleaks false positive); it is
+      # gitignored, so it never leaves the runner.
+      - name: Dummy env for rendering
+        run: |
+          cat > .env <<'EOF'
+          RESTIC_REPOSITORY=/srv/restic
+          RESTIC_PASSWORD=ci-not-a-real-secret
+          RESTIC_FORGET_ARGS=--keep-last 1
+          AWS_ACCESS_KEY_ID=ci
+          AWS_SECRET_ACCESS_KEY=ci
+          STORAGE_LOCAL_ROOT_PATH=/tmp/data
+          OA_PROJECT_DIR=/tmp/oa
+          PG_VOLUME=ci_pgdata
+          MEILI_VOLUME=ci_meilidata
+          SSH_KEY_PATH=/tmp/key
+          RESTIC_LOCAL_REPO_PATH=/tmp/repo
+          EOF
+      - run: docker compose -f docker-compose.yml config -q
+      - run: docker compose -f docker-compose.yml -f docker-compose.sftp.yml.example config -q
+      - run: docker compose -f docker-compose.yml -f docker-compose.local.yml.example config -q
+
+  # Secret scan via the official gitleaks image (no marketplace action / license).
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo --redact --verbose --no-banner
